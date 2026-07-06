@@ -1,4 +1,7 @@
-%%
+clear; clc; close all;
+
+%% 1. DADOS DE ENTRADA
+% (Seus dados originais mantidos exatamente como fornecidos)
 x = [0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 ...
 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 ...
 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 1.80e+02 1.80e+02 1.80e+02 ...
@@ -67,20 +70,94 @@ z = [ 0.00e+00 2.66e+00 3.37e+00 3.67e+00 3.78e+00 3.87e+00 3.66e+00 3.47e+00 3.
 6.38e-01 5.67e-01 5.97e-01 4.21e-01 4.43e-01 4.15e-01 3.89e-01 3.29e-01 3.28e-01 2.22e-01 0.00e+00 0.00e+00 3.24e-01 ...
 2.68e-01 3.45e-01 3.67e-01 3.66e-01 3.35e-01 2.52e-01 3.74e-01 1.78e-01 1.45e-01 2.78e-01 2.00e-01 2.00e-01 6.31e-02 ...
 0.00e+00];
- %%
-phi0 = @(x,y) gaussianaRBF([0 0],0.0001,[x; y]');
-phi1 = @(x,y) gaussianaRBF([250 100],0.0001,[x; y]');
-phi2 = @(x,y) gaussianaRBF([500 300],0.0001,[x; y]');
-
-H = [produto_interno(phi0(x,y),phi0(x,y)) produto_interno(phi0(x,y),phi1(x,y)) produto_interno(phi0(x,y),phi2(x,y)) 
-     produto_interno(phi1(x,y),phi0(x,y)) produto_interno(phi1(x,y),phi1(x,y)) produto_interno(phi1(x,y),phi2(x,y)) 
-     produto_interno(phi2(x,y),phi0(x,y)) produto_interno(phi2(x,y),phi1(x,y)) produto_interno(phi2(x,y),phi2(x,y)) 
-    ];
-b = [produto_interno(phi0(x,y),z') produto_interno(phi1(x,y),z') produto_interno(phi2(x,y),z')]';
-coefs = linsolve(H,b);
-func = @(x,y) coefs(1,:)*phi0(x,y)+coefs(2,:)*phi1(x,y)+coefs(3,:)*phi2(x,y);
 
 
-plot3(x,y,func(x,y));
+%% 2. DEFINIÇÃO DA REDE RBF
+num_centros = 20;
+pontos = [x', y'];
+z_col = z';
+
+% Fixamos a semente para resultados consistentes
+rng(1); 
+[~, centros] = kmeans(pontos, num_centros);
+
+%% 3. OTIMIZAÇÃO DO PARÂMETRO 'h'
+% Em vez de chutar um h, usamos fminsearch para encontrar o 'h' 
+% que minimiza o Erro Quadrático Médio (MSE).
+
+% Chute inicial baseado na escala dos dados (distância média entre centros)
+h0 = 1 / (mean(pdist(centros))^2); 
+
+% Função objetivo que calcula o MSE para um dado 'h'
+funcao_erro = @(h_val) calcular_erro_rbf(h_val, pontos, z_col, centros);
+
+% Encontrando o h ótimo
+opcoes = optimset('Display', 'iter');
+h_otimo = fminsearch(funcao_erro, h0, opcoes);
+fprintf('\nValor otimizado para h: %e\n', h_otimo);
+
+%% 4. TREINAMENTO FINAL COM O h_otimo
+% Montando a Matriz de Design (Phi) de forma vetorizada
+num_pontos = size(pontos, 1);
+Phi = zeros(num_pontos, num_centros);
+
+for j = 1:num_centros
+    Phi(:, j) = gaussianaRBF(centros(j, :), h_otimo, pontos);
+end
+
+% Resolvendo o sistema linear via Mínimos Quadrados (muito mais robusto que linsolve manual)
+coefs = Phi \ z_col;
+
+% Calculando a função avaliada nos pontos
+z_estimado = Phi * coefs;
+
+%% 5. CRIAÇÃO DA MALHA E PLOTAGEM
+% Definir limites da malha com base nos dados de entrada
+x_min = min(x); x_max = max(x);
+y_min = min(y); y_max = max(y);
+
+% Criar um grid de pontos 50x50
+[X_grid, Y_grid] = meshgrid(linspace(x_min, x_max, 50), linspace(y_min, y_max, 50));
+
+% --- LIMITAÇÃO DO DOMÍNIO ---
+% Encontrar o polígono envoltório (convex hull) dos dados originais no plano XY
+k = convhull(x, y);
+
+% Verificar quais pontos da malha gerada estão dentro desse polígono
+pontos_validos = inpolygon(X_grid, Y_grid, x(k), y(k));
+
+% Vetorizar os pontos do grid para passar pela função RBF
+pontos_malha = [X_grid(:), Y_grid(:)];
+num_pontos_malha = size(pontos_malha, 1);
+Phi_malha = zeros(num_pontos_malha, num_centros);
+
+% Construir a matriz de design para a malha
+for j = 1:num_centros
+    Phi_malha(:, j) = gaussianaRBF(centros(j, :), h_otimo, pontos_malha);
+end
+
+% Calcular o Z estimado para a malha 
+Z_grid_vec = Phi_malha * coefs;
+
+% Reformatar o Z estimado de volta para a estrutura de matriz
+Z_grid = reshape(Z_grid_vec, size(X_grid));
+
+% Aplicar a máscara do domínio: definir Z como NaN fora do polígono dos dados originais
+Z_grid(~pontos_validos) = NaN;
+
+% Plotagem
+figure('Name', 'Ajuste RBF Otimizado em Malha');
+
+% Plotar a superfície usando surf com transparência
+% FaceAlpha e EdgeAlpha controlam a transparência (0 = invisível, 1 = opaco)
+surf(X_grid, Y_grid, Z_grid, 'FaceAlpha', 0.4, 'EdgeAlpha', 0.3, 'EdgeColor', 'b'); 
 hold on;
-plot3(x,y,z);
+
+% Plotar os dados originais sobrepostos
+plot3(x, y, z, 'r.', 'MarkerSize', 15); 
+grid on;
+
+legend('Superfície Ajustada (RBF)', 'Dados Originais (Z)', 'Location', 'best');
+title(sprintf('Ajuste com %d Centros (h = %.2e)', num_centros, h_otimo));
+xlabel('X'); ylabel('Y'); zlabel('Z');
+view(-45, 30); % Ajusta o ângulo de visão
