@@ -1,6 +1,6 @@
-clear; clc; close all;
+clear all; clc;
 
-%% 1. DADOS DE ENTRADA
+%%
 x = [0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 ...
 0.00e+00 0.00e+00 0.00e+00 0.00e+00 0.00e+00 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 ...
 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 9.00e+01 1.80e+02 1.80e+02 1.80e+02 ...
@@ -69,96 +69,63 @@ z = [ 0.00e+00 2.66e+00 3.37e+00 3.67e+00 3.78e+00 3.87e+00 3.66e+00 3.47e+00 3.
 6.38e-01 5.67e-01 5.97e-01 4.21e-01 4.43e-01 4.15e-01 3.89e-01 3.29e-01 3.28e-01 2.22e-01 0.00e+00 0.00e+00 3.24e-01 ...
 2.68e-01 3.45e-01 3.67e-01 3.66e-01 3.35e-01 2.52e-01 3.74e-01 1.78e-01 1.45e-01 2.78e-01 2.00e-01 2.00e-01 6.31e-02 ...
 0.00e+00];
+%%
 
-pontos = [x', y'];
-z_col = z';
+% Parámetros da RBF
+h = 4.734656e-05;
+pontos = [x', y']; 
+num_centros = 3;
+[~, centros_otimizados] = kmeans(pontos, num_centros);
 
-%% 2. DEFINIÇÃO DA REDE RBF
-num_centros = 20; 
-rng(1); 
-[~, centros] = kmeans(pontos, num_centros);
+% Atualizando as funções com os novos centros
+phi0 = @(x,y) gaussianaRBF(centros_otimizados(1,:), h, [x; y]');
+phi1 = @(x,y) gaussianaRBF(centros_otimizados(2,:), h, [x; y]');
+phi2 = @(x,y) gaussianaRBF(centros_otimizados(3,:), h, [x; y]');
 
-%% 3. OTIMIZAÇÃO DO PARÂMETRO 'h'
-h0 = 1 / (mean(pdist(centros))^2); 
-funcao_erro = @(h_val) calcular_erro_rbf(h_val, pontos, z_col, centros);
+H = [produto_interno(phi0(x,y),phi0(x,y)) produto_interno(phi0(x,y),phi1(x,y)) produto_interno(phi0(x,y),phi2(x,y)) 
+     produto_interno(phi1(x,y),phi0(x,y)) produto_interno(phi1(x,y),phi1(x,y)) produto_interno(phi1(x,y),phi2(x,y)) 
+     produto_interno(phi2(x,y),phi0(x,y)) produto_interno(phi2(x,y),phi1(x,y)) produto_interno(phi2(x,y),phi2(x,y)) 
+    ];
 
-opcoes = optimset('Display', 'iter');
-h_otimo = fminsearch(funcao_erro, h0, opcoes);
+b = [produto_interno(phi0(x,y),z') produto_interno(phi1(x,y),z') produto_interno(phi2(x,y),z')]';
+coefs = linsolve(H,b);
+func = @(x,y) coefs(1,:)*phi0(x,y)+coefs(2,:)*phi1(x,y)+coefs(3,:)*phi2(x,y);
 
-%% 4. TREINAMENTO FINAL COM O h_otimo
-num_pontos = size(pontos, 1);
-Phi = zeros(num_pontos, num_centros);
-
-for j = 1:num_centros
-    Phi(:, j) = gaussianaRBF(centros(j, :), h_otimo, pontos);
-end
-coefs = Phi \ z_col;
-
-%% 5. GERAÇÃO DA MALHA (GRID) E PLOTAGEM
-resolucao = 100; 
-x_grid = linspace(min(x), max(x), resolucao);
-y_grid = linspace(min(y), max(y), resolucao);
-[X_malha, Y_malha] = meshgrid(x_grid, y_grid);
-
-pontos_malha = [X_malha(:), Y_malha(:)];
-
-Phi_malha = zeros(size(pontos_malha, 1), num_centros);
-for j = 1:num_centros
-    Phi_malha(:, j) = gaussianaRBF(centros(j, :), h_otimo, pontos_malha);
-end
-
-Z_malha_vec = Phi_malha * coefs;
-Z_malha = reshape(Z_malha_vec, size(X_malha));
-
-% Delimitando o Domínio
-k = boundary(x', y', 0.8);
-x_borda = x(k);
-y_borda = y(k);
-
-mascara = inpolygon(X_malha, Y_malha, x_borda, y_borda);
-Z_malha(~mascara) = NaN;
-
-figure('Name', 'Malha RBF Delimitada', 'Color', 'w');
-
-% --- ALTERADO DE surf PARA mesh ---
-mesh(X_malha, Y_malha, Z_malha, 'FaceColor', 'none', 'EdgeColor', 'interp');
-colormap(parula); 
-colorbar;         
+figure;
 hold on;
-
-% Plot dos pontos
-plot3(x, y, z, 'o', 'MarkerFaceColor', 'r', 'MarkerEdgeColor', 'k', 'MarkerSize', 5);
-
-% Linha da fronteira no chão
-plot3(x_borda, y_borda, zeros(size(x_borda)), 'k-', 'LineWidth', 1.5);
-
 grid on;
-legend('Malha RBF', 'Pontos Originais', 'Fronteira do Domínio', 'Location', 'best');
-title(sprintf('Malha RBF Delimitada (h = %.2e)', h_otimo));
-xlabel('X'); ylabel('Y'); zlabel('Z');
-view(-45, 30); 
+plot3(x,y,z, "Color", "b", "LineWidth", 2);
 
-%% FUNÇÕES AUXILIARES
-function phi_vals = gaussianaRBF(centro, h, pts)
-    distancias_quadradas = sum((pts - centro).^2, 2);
-    phi_vals = exp(-h * distancias_quadradas);
+%% Funções auxiliares
+function res = gaussianaRBF(centro,raio,pontos)
+    vec_norm_sqr = sum((pontos - centro).^2,2);    
+    res = exp(-raio*(vec_norm_sqr));
 end
 
-function erro = calcular_erro_rbf(h_val, pts, z_real, centros)
+function erro = calcular_erro_rbf(h_val, pontos, z_real, centros)
+    % Evita h negativo ou zero (matematicamente inválido para essa formulação)
     if h_val <= 0
         erro = inf;
         return;
     end
     
     num_centros = size(centros, 1);
-    num_pontos = size(pts, 1);
+    num_pontos = size(pontos, 1);
     Phi = zeros(num_pontos, num_centros);
     
+    % Monta a matriz de design
     for j = 1:num_centros
-        Phi(:, j) = gaussianaRBF(centros(j, :), h_val, pts);
+        Phi(:, j) = gaussianaRBF(centros(j, :), h_val, pontos);
     end
     
+    % Resolve os coeficientes e prevê
     c = Phi \ z_real; 
     z_pred = Phi * c;
+    
+    % Calcula o Erro Quadrático Médio (MSE)
     erro = mean((z_real - z_pred).^2);
+end
+
+function res = produto_interno(g_x,h_x)
+    res = sum(g_x.*h_x);
 end
