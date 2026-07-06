@@ -92,7 +92,40 @@ coefs = linsolve(H,b);
 func = @(x,y) coefs(1,:)*phi0(x,y)+coefs(2,:)*phi1(x,y)+coefs(3,:)*phi2(x,y);
 
 figure;
-plot3(x,y,func(x,y), "Color", "b");
 hold on;
 grid on;
-plot3(x,y,z, "Color", "r");
+plot3(x,y,z, "Color", "b", "LineWidth", 2);
+
+%% Funções auxiliares
+function res = gaussianaRBF(centro,raio,pontos)
+    vec_norm_sqr = sum((pontos - centro).^2,2);    
+    res = exp(-raio*(vec_norm_sqr));
+end
+
+function erro = calcular_erro_rbf(h_val, pontos, z_real, centros)
+    % Evita h negativo ou zero (matematicamente inválido para essa formulação)
+    if h_val <= 0
+        erro = inf;
+        return;
+    end
+    
+    num_centros = size(centros, 1);
+    num_pontos = size(pontos, 1);
+    Phi = zeros(num_pontos, num_centros);
+    
+    % Monta a matriz de design
+    for j = 1:num_centros
+        Phi(:, j) = gaussianaRBF(centros(j, :), h_val, pontos);
+    end
+    
+    % Resolve os coeficientes e prevê
+    c = Phi \ z_real; 
+    z_pred = Phi * c;
+    
+    % Calcula o Erro Quadrático Médio (MSE)
+    erro = mean((z_real - z_pred).^2);
+end
+
+function res = produto_interno(g_x,h_x)
+    res = sum(g_x.*h_x);
+end
